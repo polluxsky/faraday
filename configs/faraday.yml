@@ -10,7 +10,7 @@ proxies:
     log_level: "INFO"
   
   - proxy_name: "mysql_proxy_2"
-    listen_port: 3308
+    listen_port: 3309  # 修改为未被占用的端口
     target_host: "localhost"
     target_port: 3306
     buffer_size: 1000

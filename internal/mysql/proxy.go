@@ -222,7 +222,13 @@ func (p *Proxy) pipe(src, dst net.Conn, clientAddr string, done chan struct{}) {
 					ErrorMessage: fmt.Sprintf("读取数据失败: %v", err),
 				})
 				}
-				done <- struct{}{}
+				// 安全地向done通道发送信号，避免向已关闭的通道发送数据
+				select {
+				case done <- struct{}{}:
+					// 成功发送信号
+				default:
+					// 通道可能已经关闭，静默忽略
+				}
 				return
 			}
 
