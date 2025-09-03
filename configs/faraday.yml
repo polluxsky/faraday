@@ -3,23 +3,23 @@
 
 proxies:
   - proxy_name: "mysql_proxy_1"
-    listen_port: 3307
+    listen_port: 3310
     target_host: "localhost"
     target_port: 3306
     buffer_size: 1000
-    log_level: "INFO"
+    log_level: "DEBUG" # 提高日志级别以便调试
   
   - proxy_name: "mysql_proxy_2"
-    listen_port: 3309  # 修改为未被占用的端口
+    listen_port: 3311
     target_host: "localhost"
     target_port: 3306
     buffer_size: 1000
-    log_level: "INFO"
+    log_level: "DEBUG" # 提高日志级别以便调试
 
 # Deamon configuration
 daemon:
-  log_file: "/var/log/faraday-deamon.log"
-  pid_file: "/var/run/faraday-deamon.pid"
+  log_file: "./faraday-deamon.log"  # 使用相对路径，避免权限问题
+  pid_file: "./faraday-deamon.pid"  # 使用相对路径，避免权限问题
 
 # Kafka configuration (optional)
 # kafka:

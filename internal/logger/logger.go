@@ -3,9 +3,11 @@ package logger
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,6 +29,7 @@ type Logger struct {
 	proxyName string
 	buffer    *bufio.Writer
 	mutex     sync.Mutex
+	isConsole bool // 标记是否为控制台输出
 }
 
 // LogEntry 定义日志条目结构
@@ -45,17 +48,25 @@ type LogEntry struct {
 // NewLogger 创建一个新的日志记录器
 func NewLogger(writer io.Writer, level LogLevel, proxyName string) *Logger {
 	buffer := bufio.NewWriter(writer)
+	isConsole := false
+	// 检查是否为标准输出（控制台）
+	if writer == os.Stdout || writer == os.Stderr {
+		isConsole = true
+	}
 	return &Logger{
 		level:     level,
 		writer:    writer,
 		proxyName: proxyName,
 		buffer:    buffer,
+		isConsole: isConsole,
 	}
 }
 
 // NewConsoleLogger 创建一个控制台日志记录器
 func NewConsoleLogger(level LogLevel, proxyName string) *Logger {
-	return NewLogger(os.Stdout, level, proxyName)
+	logger := NewLogger(os.Stdout, level, proxyName)
+	logger.isConsole = true
+	return logger
 }
 
 // NewFileLogger 创建一个文件日志记录器
@@ -64,7 +75,9 @@ func NewFileLogger(filePath string, level LogLevel, proxyName string) (*Logger, 
 	if err != nil {
 		return nil, err
 	}
-	return NewLogger(file, level, proxyName), nil
+	logger := NewLogger(file, level, proxyName)
+	logger.isConsole = false
+	return logger, nil
 }
 
 // logLevelToString 将日志级别转换为字符串
@@ -95,38 +108,129 @@ func (l *Logger) log(level LogLevel, entry LogEntry) {
 	entry.Timestamp = time.Now().Format("2006-01-02 15:04:05.000")
 	entry.ProxyName = l.proxyName
 
-	// 转换为JSON
-	logData, err := json.Marshal(entry)
-	if err != nil {
-		// 如果JSON序列化失败，使用简单格式记录
-		l.mutex.Lock()
-		defer l.mutex.Unlock()
-		log.Printf("%s [%s] [%s] 日志序列化失败: %v\n", 
-			entry.Timestamp, entry.Level, entry.ProxyName, err)
-		return
+	// 预处理QueryContent字段，将特殊字符转换为可读形式
+	if entry.QueryContent != "" {
+		// 创建一个新的字符串构建器
+		var sb strings.Builder
+		sb.Grow(len(entry.QueryContent) * 2) // 预分配空间以提高性能
+		
+		// 遍历原始字符串的每个字符
+		for _, char := range entry.QueryContent {
+			// 处理特殊字符
+			switch {
+			case char < 32 && char != '\n' && char != '\r' && char != '\t':
+				// 只处理控制字符，保留换行符、回车符和制表符的原始形式
+				sb.WriteString(fmt.Sprintf("\\u%04X", uint16(char)))
+			case char == 127:
+				// 处理DEL字符
+				sb.WriteString(fmt.Sprintf("\\u%04X", uint16(char)))
+			default:
+				// 其他字符保持不变（包括换行符、回车符和制表符）
+				sb.WriteRune(char)
+			}
+		}
+		
+		// 创建临时日志条目，避免修改原始entry
+		tempEntry := entry
+		tempEntry.QueryContent = sb.String()
+		entry = tempEntry
 	}
-
-	// 写入日志，仿log4j格式
-	logLine := entry.Timestamp + " [" + entry.Level + "] [" + entry.ProxyName + "] " + string(logData) + "\n"
 
 	// 加锁确保并发安全
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
-	// 写入缓冲
-	written, err := l.buffer.WriteString(logLine)
-	if err != nil || written != len(logLine) {
-		// 如果缓冲写入失败，尝试直接写入
+	if l.isConsole {
+		// 控制台输出：使用更友好的格式，直接显示控制字符效果
+		var logLine string
+		if entry.QueryContent != "" {
+			// 对于查询日志，使用更清晰的格式
+			logLine = fmt.Sprintf("%s [%s] [%s] Source: %s, Query Time: %dms, Rows: %d\nQuery:\n%s\n",
+				entry.Timestamp, entry.Level, entry.ProxyName,
+				entry.SourceIP, entry.QueryTime, entry.RowCount,
+				entry.QueryContent)
+		} else if entry.ErrorMessage != "" {
+			// 错误日志
+			logLine = fmt.Sprintf("%s [%s] [%s] Error: %s\nAdditional Info: %s\n",
+				entry.Timestamp, entry.Level, entry.ProxyName,
+				entry.ErrorMessage, string(entry.AdditionalInfo))
+		} else {
+			// 通用日志格式
+			// 处理AdditionalInfo字段，确保显示为可读的JSON字符串
+			additionalInfoStr := ""
+			if len(entry.AdditionalInfo) > 0 {
+				// 将json.RawMessage转换为可读字符串
+				var m map[string]interface{}
+				if err := json.Unmarshal(entry.AdditionalInfo, &m); err == nil {
+					// 如果解析成功，使用格式化的JSON
+					if prettyJSON, err := json.MarshalIndent(m, "", "  "); err == nil {
+						additionalInfoStr = string(prettyJSON)
+					} else {
+						additionalInfoStr = string(entry.AdditionalInfo)
+					}
+				} else {
+					// 如果解析失败，直接使用原始字符串
+					additionalInfoStr = string(entry.AdditionalInfo)
+				}
+			}
+			
+			// 构建自定义的日志行，避免使用%+v导致AdditionalInfo显示为十六进制
+			logLine := fmt.Sprintf("%s [%s] [%s] Source: %s, Query Time: %dms, Rows: %d\n", entry.Timestamp, entry.Level, entry.ProxyName, entry.SourceIP, entry.QueryTime, entry.RowCount)
+			// 如果有AdditionalInfo，添加到日志中
+			if additionalInfoStr != "" {
+				logLine += fmt.Sprintf("Additional Info:\n%s\n", additionalInfoStr)
+			}
+		}
+		
+		// 直接写入标准输出，不进行JSON序列化
 		_, err := l.writer.Write([]byte(logLine))
 		if err != nil {
-			log.Printf("写入日志失败: %v\n", err)
+			log.Printf("写入控制台日志失败: %v\n", err)
 		}
-		return
-	}
+	} else {
+		// 文件输出：保持原有的JSON格式
+		// 创建缓冲区存储JSON数据
+		buffer := &strings.Builder{}
 
-	// 定期刷新缓冲
-	if l.buffer.Buffered() > 4096 {
-		l.buffer.Flush()
+		// 创建JSON编码器并配置
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false) // 不转义HTML字符
+		encoder.SetIndent("", "")  // 不缩进
+
+		// 序列化日志条目
+		err := encoder.Encode(entry)
+		if err != nil {
+			// 如果JSON序列化失败，使用简单格式记录
+			log.Printf("%s [%s] [%s] 日志序列化失败: %v\n", 
+				entry.Timestamp, entry.Level, entry.ProxyName, err)
+			return
+		}
+
+		// 获取JSON字符串并移除末尾换行符
+		jsonStr := buffer.String()
+		if len(jsonStr) > 0 && jsonStr[len(jsonStr)-1] == '\n' {
+			jsonStr = jsonStr[:len(jsonStr)-1]
+		}
+
+		// 写入日志，保持统一格式
+		logLine := fmt.Sprintf("%s [%s] [%s] %s\n", 
+			entry.Timestamp, entry.Level, entry.ProxyName, jsonStr)
+
+		// 写入缓冲
+		written, err := l.buffer.WriteString(logLine)
+		if err != nil || written != len(logLine) {
+			// 如果缓冲写入失败，尝试直接写入
+			_, err := l.writer.Write([]byte(logLine))
+			if err != nil {
+				log.Printf("写入日志失败: %v\n", err)
+			}
+			return
+		}
+
+		// 定期刷新缓冲
+		if l.buffer.Buffered() > 4096 {
+			l.buffer.Flush()
+		}
 	}
 }
 

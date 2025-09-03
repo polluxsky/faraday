@@ -12,7 +12,6 @@ import (
 	"faraday/internal/config"
 	"faraday/internal/kafka"
 	"faraday/internal/logger"
-	"faraday/pkg/utils"
 )
 
 // PacketType 定义MySQL包类型
@@ -190,7 +189,6 @@ func (p *Proxy) handleConnection(clientConn net.Conn) {
 
 	// 等待任一方向的数据传输结束
 	<-done
-	close(done)
 
 	// 记录断开连接信息
 	p.log.Info(logger.LogEntry{
@@ -245,7 +243,13 @@ func (p *Proxy) pipe(src, dst net.Conn, clientAddr string, done chan struct{}) {
 			SourceIP:    clientAddr,
 			ErrorMessage: fmt.Sprintf("写入数据失败: %v", err),
 		})
-				done <- struct{}{}
+				// 安全地向done通道发送信号，避免向已关闭的通道发送数据
+				select {
+				case done <- struct{}{}:
+					// 成功发送信号
+				default:
+					// 通道可能已经关闭，静默忽略
+				}
 				return
 			}
 
@@ -254,7 +258,13 @@ func (p *Proxy) pipe(src, dst net.Conn, clientAddr string, done chan struct{}) {
 			SourceIP:    clientAddr,
 			ErrorMessage: "写入的数据长度不匹配",
 		})
-				done <- struct{}{}
+				// 安全地向done通道发送信号，避免向已关闭的通道发送数据
+				select {
+				case done <- struct{}{}:
+					// 成功发送信号
+				default:
+					// 通道可能已经关闭，静默忽略
+				}
 				return
 			}
 		}
@@ -284,12 +294,11 @@ func (p *Proxy) analyzePacket(packet []byte, clientAddr string) {
 		// 对于查询命令，尝试提取查询内容
 		if commandType == 3 /* COM_QUERY */ && len(data) > 1 {
 			queryContent := string(data[1:])
-			// 对查询字符串进行转码，处理特殊字符
-			transcodedQuery := utils.TranscodeString(queryContent, utils.DefaultSQLTranscoder())
+			// 直接使用原始查询内容，不再进行转码处理，避免双重转义
 			// 发送查询统计信息到通道
 			p.statsChan <- &QueryStats{
 				SourceIP:     clientAddr,
-				QueryContent: transcodedQuery,
+				QueryContent: queryContent,
 				StartTime:    time.Now(),
 			}
 		}

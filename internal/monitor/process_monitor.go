@@ -315,13 +315,19 @@ func (p *MonitoredProcess) readOutput(output io.ReadCloser) {
 }
 
 // CheckAndRestartDaemon 检查守护进程状态并在需要时重启
-func CheckAndRestartDaemon() {
+func CheckAndRestartDaemon(configPath string, logLevel string) {
 	// 这个函数会被faraday进程调用，用于检查守护进程是否运行
 	// 实现思路：检查pid文件或使用进程间通信来确认守护进程状态
 	// 如果守护进程未运行，则尝试启动一个新的守护进程实例
 	
-	// 这里是一个简化的实现
-	// 在实际应用中，应该有更可靠的机制来检测守护进程状态
+	// 保存配置参数，用于重启时使用
+	if configPath == "" {
+		configPath = "configs/faraday.yml"
+	}
+	if logLevel == "" {
+		logLevel = "INFO"
+	}
+	
 	go func() {
 		for {
 			time.Sleep(30 * time.Second) // 每30秒检查一次
@@ -344,8 +350,8 @@ func CheckAndRestartDaemon() {
 				// 构建守护进程可执行文件路径（假设在同一目录下）
 			daemonPath := filepath.Join(filepath.Dir(exePath), "faraday-daemon")
 				
-				// 启动守护进程
-				cmd := exec.Command(daemonPath)
+				// 启动守护进程，传递配置文件路径和日志级别参数
+				cmd := exec.Command(daemonPath, "--config", configPath, "--log-level", logLevel)
 				if err := cmd.Start(); err != nil {
 					log.Printf("启动守护进程失败: %v", err)
 				} else {
