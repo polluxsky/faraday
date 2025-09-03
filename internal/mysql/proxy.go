@@ -298,13 +298,14 @@ func (p *Proxy) processStats() {
 		// 计算查询执行时间（毫秒）
 		executionTime := time.Since(stats.StartTime).Milliseconds()
 
-		// 记录查询日志
+		// 记录查询日志 - 正确设置所有必要字段
 		logEntry := logger.LogEntry{
+			SourceIP:     stats.SourceIP,
+			QueryContent: stats.QueryContent,
+			QueryTime:    executionTime,
 			AdditionalInfo: []byte(fmt.Sprintf(`{
-				"query": "%s",
-				"source_ip": "%s",
 				"execution_time_ms": %d
-			}`, stats.QueryContent, stats.SourceIP, executionTime)),
+			}`, executionTime)),
 		}
 
 		// 根据执行时间选择日志级别
